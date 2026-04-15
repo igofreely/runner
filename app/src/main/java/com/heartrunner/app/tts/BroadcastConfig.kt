@@ -7,8 +7,9 @@ package com.heartrunner.app.tts
 data class BroadcastConfig(
     // 播报开关
     val enabled: Boolean = true,
-    // 触发方式：DISTANCE 或 TIME
-    val triggerMode: TriggerMode = TriggerMode.TIME,
+    // 触发方式（可同时启用）
+    val triggerByDistance: Boolean = true,
+    val triggerByTime: Boolean = true,
     // 距离间隔（公里）
     val distanceIntervalKm: Double = 1.0,
     // 时间间隔（分钟）
@@ -20,6 +21,4 @@ data class BroadcastConfig(
     val announceHeartRate: Boolean = true,
     val announceAvgHeartRate: Boolean = false,
     val announceAvgSpeed: Boolean = false
-) {
-    enum class TriggerMode { DISTANCE, TIME }
-}
+)

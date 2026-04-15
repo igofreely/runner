@@ -968,7 +968,8 @@ fun BroadcastSettingsDialog(
     onSave: (BroadcastConfig) -> Unit
 ) {
     var enabled by remember { mutableStateOf(config.enabled) }
-    var triggerMode by remember { mutableStateOf(config.triggerMode) }
+    var triggerByDistance by remember { mutableStateOf(config.triggerByDistance) }
+    var triggerByTime by remember { mutableStateOf(config.triggerByTime) }
     var distanceInterval by remember { mutableStateOf(config.distanceIntervalKm.toString()) }
     var timeInterval by remember { mutableStateOf(config.timeIntervalMin.toString()) }
     var announceSpeed by remember { mutableStateOf(config.announceSpeed) }
@@ -998,28 +999,28 @@ fun BroadcastSettingsDialog(
 
                 HorizontalDivider()
 
-                // 触发方式
+                // 触发方式（可同时启用）
                 Text("播报触发方式", style = MaterialTheme.typography.titleSmall)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     FilterChip(
-                        selected = triggerMode == BroadcastConfig.TriggerMode.DISTANCE,
-                        onClick = { triggerMode = BroadcastConfig.TriggerMode.DISTANCE },
+                        selected = triggerByDistance,
+                        onClick = { triggerByDistance = !triggerByDistance },
                         label = { Text("按距离") },
                         modifier = Modifier.weight(1f)
                     )
                     FilterChip(
-                        selected = triggerMode == BroadcastConfig.TriggerMode.TIME,
-                        onClick = { triggerMode = BroadcastConfig.TriggerMode.TIME },
+                        selected = triggerByTime,
+                        onClick = { triggerByTime = !triggerByTime },
                         label = { Text("按时间") },
                         modifier = Modifier.weight(1f)
                     )
                 }
 
                 // 间隔设置
-                if (triggerMode == BroadcastConfig.TriggerMode.DISTANCE) {
+                if (triggerByDistance) {
                     OutlinedTextField(
                         value = distanceInterval,
                         onValueChange = { distanceInterval = it.filter { c -> c.isDigit() || c == '.' } },
@@ -1029,7 +1030,8 @@ fun BroadcastSettingsDialog(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
-                } else {
+                }
+                if (triggerByTime) {
                     OutlinedTextField(
                         value = timeInterval,
                         onValueChange = { timeInterval = it.filter { c -> c.isDigit() } },
@@ -1064,7 +1066,8 @@ fun BroadcastSettingsDialog(
                 onClick = {
                     val newConfig = BroadcastConfig(
                         enabled = enabled,
-                        triggerMode = triggerMode,
+                        triggerByDistance = triggerByDistance,
+                        triggerByTime = triggerByTime,
                         distanceIntervalKm = distanceInterval.toDoubleOrNull() ?: 1.0,
                         timeIntervalMin = timeInterval.toIntOrNull() ?: 5,
                         announceSpeed = announceSpeed,

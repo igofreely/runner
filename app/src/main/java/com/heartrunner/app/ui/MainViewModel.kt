@@ -274,7 +274,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun checkDistanceBroadcast() {
         val config = _broadcastConfig.value
-        if (!config.enabled || config.triggerMode != BroadcastConfig.TriggerMode.DISTANCE) return
+        if (!config.enabled || !config.triggerByDistance) return
         if (!_ttsEnabled.value || !_isRecording.value) return
 
         val distKm = _totalDistance.value / 1000.0
@@ -287,7 +287,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun checkTimeBroadcast() {
         val config = _broadcastConfig.value
-        if (!config.enabled || config.triggerMode != BroadcastConfig.TriggerMode.TIME) return
+        if (!config.enabled || !config.triggerByTime) return
         if (!_ttsEnabled.value || !_isRecording.value) return
 
         val now = System.currentTimeMillis()
