@@ -1,6 +1,7 @@
 package com.heartrunner.app.ui
 
 import android.Manifest
+import android.content.Intent
 import android.os.Build
 import androidx.compose.animation.*
 import androidx.compose.foundation.Canvas
@@ -22,6 +23,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -31,6 +33,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.heartrunner.app.ble.ConnectionState
+import com.heartrunner.app.export.ExportFormat
 import com.heartrunner.app.tts.HeartRateAlertLogic
 
 @OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class)
@@ -57,8 +60,13 @@ fun HeartRunnerApp(viewModel: MainViewModel) {
     val lastAlert by viewModel.lastAlert.collectAsStateWithLifecycle()
     val ttsEnabled by viewModel.ttsEnabled.collectAsStateWithLifecycle()
     val alertConfig by viewModel.alertConfig.collectAsStateWithLifecycle()
+    val isRecording by viewModel.isRecording.collectAsStateWithLifecycle()
+    val currentSpeed by viewModel.currentSpeed.collectAsStateWithLifecycle()
+    val totalDistance by viewModel.totalDistance.collectAsStateWithLifecycle()
+    val hasWorkoutToExport by viewModel.hasWorkoutToExport.collectAsStateWithLifecycle()
 
     var showSettings by remember { mutableStateOf(false) }
+    var showExportDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         if (!permissionState.allPermissionsGranted) {
@@ -120,6 +128,13 @@ fun HeartRunnerApp(viewModel: MainViewModel) {
                             runDurationSec = runDuration,
                             lastAlert = lastAlert,
                             alertConfig = alertConfig,
+                            isRecording = isRecording,
+                            currentSpeed = currentSpeed,
+                            totalDistance = totalDistance,
+                            hasWorkoutToExport = hasWorkoutToExport,
+                            onStartRecording = { viewModel.startRecording() },
+                            onStopRecording = { viewModel.stopRecording() },
+                            onExport = { showExportDialog = true },
                             onDisconnect = { viewModel.disconnect() }
                         )
                     }
@@ -135,6 +150,20 @@ fun HeartRunnerApp(viewModel: MainViewModel) {
             onSave = { config ->
                 viewModel.updateConfig(config)
                 showSettings = false
+            }
+        )
+    }
+
+    if (showExportDialog) {
+        ExportDialog(
+            onDismiss = { showExportDialog = false },
+            onExport = { format ->
+                showExportDialog = false
+                viewModel.exportWorkout(format)
+            },
+            onClear = {
+                showExportDialog = false
+                viewModel.clearWorkout()
             }
         )
     }
@@ -286,8 +315,17 @@ fun MonitorSection(
     runDurationSec: Long,
     lastAlert: String,
     alertConfig: HeartRateAlertLogic.AlertConfig,
+    isRecording: Boolean,
+    currentSpeed: Float,
+    totalDistance: Double,
+    hasWorkoutToExport: Boolean,
+    onStartRecording: () -> Unit,
+    onStopRecording: () -> Unit,
+    onExport: () -> Unit,
     onDisconnect: () -> Unit
 ) {
+    val context = LocalContext.current
+
     Column(
         modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -308,6 +346,28 @@ fun MonitorSection(
                 label = "范围",
                 value = "${alertConfig.zoneLowBpm}-${alertConfig.zoneHighBpm}"
             )
+        }
+
+        // 运动数据（录制中或有数据时显示）
+        if (isRecording || hasWorkoutToExport) {
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                InfoChip(
+                    label = "速度",
+                    value = String.format("%.1f km/h", currentSpeed)
+                )
+                InfoChip(
+                    label = "距离",
+                    value = if (totalDistance >= 1000) {
+                        String.format("%.2f km", totalDistance / 1000)
+                    } else {
+                        String.format("%.0f m", totalDistance)
+                    }
+                )
+            }
         }
 
         Spacer(Modifier.height(16.dp))
@@ -340,6 +400,54 @@ fun MonitorSection(
                     Icon(Icons.Default.VolumeUp, contentDescription = null, modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(8.dp))
                     Text(lastAlert, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // 录制控制按钮
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (isRecording) {
+                Button(
+                    onClick = onStopRecording,
+                    modifier = Modifier.weight(1f).height(48.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.Stop, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("停止记录")
+                }
+            } else {
+                Button(
+                    onClick = onStartRecording,
+                    modifier = Modifier.weight(1f).height(48.dp),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.FiberManualRecord, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("开始记录")
+                }
+            }
+
+            if (hasWorkoutToExport && !isRecording) {
+                Button(
+                    onClick = onExport,
+                    modifier = Modifier.weight(1f).height(48.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.tertiary
+                    )
+                ) {
+                    Icon(Icons.Default.FileDownload, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("导出")
                 }
             }
         }
@@ -598,6 +706,58 @@ fun SettingsDialog(
             }
         }
     )
+}
+
+@Composable
+fun ExportDialog(
+    onDismiss: () -> Unit,
+    onExport: (ExportFormat) -> android.net.Uri?,
+    onClear: () -> Unit
+) {
+    val context = LocalContext.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("导出运动数据") },
+        text = {
+            Text("选择导出格式。GPX 格式兼容性更广，TCX 格式包含更多训练数据。")
+        },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = {
+                    val uri = onExport(ExportFormat.GPX)
+                    if (uri != null) shareFile(context, uri, "application/gpx+xml")
+                }) {
+                    Text("GPX")
+                }
+                TextButton(onClick = {
+                    val uri = onExport(ExportFormat.TCX)
+                    if (uri != null) shareFile(context, uri, "application/xml")
+                }) {
+                    Text("TCX")
+                }
+            }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onClear) {
+                    Text("清除数据", color = MaterialTheme.colorScheme.error)
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("取消")
+                }
+            }
+        }
+    )
+}
+
+private fun shareFile(context: android.content.Context, uri: android.net.Uri, mimeType: String) {
+    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+        type = mimeType
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(shareIntent, "导出运动数据"))
 }
 
 private fun formatDuration(seconds: Long): String {

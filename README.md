@@ -9,6 +9,8 @@
 - **心率区间管理** — 可配置最大心率与目标区间百分比，心率超出区间时自动提醒
 - **语音播报** — 基于 TTS 的中文语音提醒，包括定时心率播报与区间越界警告
 - **心率趋势图** — Canvas 绘制的折线图，展示最近 60 次心率数据走势
+- **运动记录** — 记录心率、GPS 轨迹、速度、海拔等运动数据
+- **数据导出** — 支持导出 GPX 和 TCX 格式的运动文件，可分享到第三方平台
 - **前台服务** — 息屏后保持蓝牙连接与心率监测，通知栏实时显示当前心率
 - **Material Design 3** — 支持动态取色（Android 12+）和深色模式
 
@@ -33,6 +35,12 @@ com.heartrunner.app
 ├── HeartRunnerApp.kt              # Application 初始化，创建通知渠道
 ├── ble/
 │   └── BleHeartRateManager.kt     # BLE 扫描、连接、心率数据解析
+├── data/
+│   └── WorkoutData.kt             # 运动数据模型（轨迹点）
+├── export/
+│   └── WorkoutExporter.kt         # GPX / TCX 格式导出
+├── location/
+│   └── LocationTracker.kt         # GPS 定位与轨迹跟踪
 ├── service/
 │   └── HeartRateService.kt        # 前台服务，息屏保活
 ├── tts/

@@ -5,23 +5,36 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.location.Location
+import android.net.Uri
 import android.os.IBinder
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.heartrunner.app.ble.BleHeartRateManager
 import com.heartrunner.app.ble.ConnectionState
 import com.heartrunner.app.ble.ScannedDevice
+import com.heartrunner.app.data.WorkoutPoint
+import com.heartrunner.app.export.ExportFormat
+import com.heartrunner.app.export.WorkoutExporter
+import com.heartrunner.app.location.LocationTracker
 import com.heartrunner.app.service.HeartRateService
 import com.heartrunner.app.tts.HeartRateAlertLogic
 import com.heartrunner.app.tts.TtsAlertManager
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val bleManager = BleHeartRateManager(application)
     private val ttsManager = TtsAlertManager(application)
     private val alertLogic = HeartRateAlertLogic()
+    private val locationTracker = LocationTracker(application)
 
     private val _alertConfig = MutableStateFlow(HeartRateAlertLogic.AlertConfig())
     val alertConfig: StateFlow<HeartRateAlertLogic.AlertConfig> = _alertConfig.asStateFlow()
@@ -41,6 +54,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // TTS 开关
     private val _ttsEnabled = MutableStateFlow(true)
     val ttsEnabled: StateFlow<Boolean> = _ttsEnabled.asStateFlow()
+
+    // 运动记录状态
+    private val _isRecording = MutableStateFlow(false)
+    val isRecording: StateFlow<Boolean> = _isRecording.asStateFlow()
+
+    private val _currentSpeed = MutableStateFlow(0f)
+    val currentSpeed: StateFlow<Float> = _currentSpeed.asStateFlow()
+
+    private val _totalDistance = MutableStateFlow(0.0)
+    val totalDistance: StateFlow<Double> = _totalDistance.asStateFlow()
+
+    private val _hasWorkoutToExport = MutableStateFlow(false)
+    val hasWorkoutToExport: StateFlow<Boolean> = _hasWorkoutToExport.asStateFlow()
+
+    private val workoutPoints = mutableListOf<WorkoutPoint>()
+    private var lastLocation: Location? = null
+    private var recordingJob: Job? = null
 
     private var serviceConnection: ServiceConnection? = null
     private var heartRateService: HeartRateService? = null
@@ -121,6 +151,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun disconnect() {
+        if (_isRecording.value) {
+            stopRecording()
+        }
         alertLogic.reset()
         bleManager.disconnect()
     }
@@ -135,6 +168,85 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (!_ttsEnabled.value) {
             ttsManager.stop()
         }
+    }
+
+    fun startRecording() {
+        workoutPoints.clear()
+        _totalDistance.value = 0.0
+        _currentSpeed.value = 0f
+        lastLocation = null
+        _isRecording.value = true
+        _hasWorkoutToExport.value = false
+        locationTracker.startTracking()
+
+        recordingJob = viewModelScope.launch {
+            locationTracker.currentLocation.collect { location ->
+                if (location != null) {
+                    val hr = bleManager.heartRate.value
+                    val point = WorkoutPoint(
+                        timestamp = System.currentTimeMillis(),
+                        latitude = location.latitude,
+                        longitude = location.longitude,
+                        altitude = location.altitude,
+                        speed = location.speed,
+                        heartRate = hr
+                    )
+                    workoutPoints.add(point)
+                    _currentSpeed.value = location.speed * 3.6f // m/s -> km/h
+
+                    lastLocation?.let { last ->
+                        val results = FloatArray(1)
+                        Location.distanceBetween(
+                            last.latitude, last.longitude,
+                            location.latitude, location.longitude,
+                            results
+                        )
+                        _totalDistance.value += results[0].toDouble()
+                    }
+                    lastLocation = location
+                }
+            }
+        }
+    }
+
+    fun stopRecording() {
+        _isRecording.value = false
+        recordingJob?.cancel()
+        recordingJob = null
+        locationTracker.stopTracking()
+        _hasWorkoutToExport.value = workoutPoints.isNotEmpty()
+    }
+
+    fun exportWorkout(format: ExportFormat): Uri? {
+        val points = workoutPoints.toList()
+        if (points.isEmpty()) return null
+
+        val content = when (format) {
+            ExportFormat.GPX -> WorkoutExporter.exportGpx(points)
+            ExportFormat.TCX -> WorkoutExporter.exportTcx(points)
+        }
+
+        val extension = format.name.lowercase()
+        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+            .format(Date(points.first().timestamp))
+        val fileName = "heartrunner_${timestamp}.$extension"
+
+        val app = getApplication<Application>()
+        val dir = File(app.cacheDir, "workouts")
+        dir.mkdirs()
+        val file = File(dir, fileName)
+        file.writeText(content)
+
+        return FileProvider.getUriForFile(
+            app, "${app.packageName}.fileprovider", file
+        )
+    }
+
+    fun clearWorkout() {
+        workoutPoints.clear()
+        _hasWorkoutToExport.value = false
+        _totalDistance.value = 0.0
+        _currentSpeed.value = 0f
     }
 
     private fun startForegroundService() {
@@ -164,6 +276,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        if (_isRecording.value) {
+            stopRecording()
+        }
         ttsManager.shutdown()
         bleManager.disconnect()
         stopForegroundService()
