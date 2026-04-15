@@ -48,6 +48,7 @@ import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.util.MapTileIndex
 import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
 import com.heartrunner.app.location.CoordinateConverter
 import java.io.File
@@ -347,6 +348,20 @@ fun MonitorSection(
     val isConnected = connectionState == ConnectionState.CONNECTED
     val isScanning = connectionState == ConnectionState.SCANNING
     val scrollState = rememberScrollState()
+    var isMapFullscreen by remember { mutableStateOf(false) }
+
+    // 全屏地图模式
+    if (isMapFullscreen) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            TrackMapView(
+                trackPoints = trackPoints,
+                modifier = Modifier.fillMaxSize(),
+                showFullscreenButton = true,
+                onToggleFullscreen = { isMapFullscreen = false }
+            )
+        }
+        return
+    }
 
     Column(
         modifier = Modifier
@@ -354,31 +369,6 @@ fun MonitorSection(
             .verticalScroll(scrollState),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // ── 顶部：心率 + 时间 ──
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // 心率显示
-            CompactHeartRateDisplay(heartRate = heartRate, config = alertConfig)
-            Spacer(Modifier.width(16.dp))
-            // 运动时间
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    "运动时间",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    formatDuration(runDurationSec),
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        }
-
-        Spacer(Modifier.height(12.dp))
-
         // ── 核心数据面板：2x3 网格 ──
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -406,9 +396,9 @@ fun MonitorSection(
                         modifier = Modifier.weight(1f)
                     )
                     DataCell(
-                        label = "平均配速",
-                        value = averagePace.ifEmpty { "--'--\"" },
-                        unit = "/km",
+                        label = "运动时间",
+                        value = formatDuration(runDurationSec),
+                        unit = "",
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -439,14 +429,16 @@ fun MonitorSection(
             }
         }
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(8.dp))
 
         // ── 地图轨迹 ──
         TrackMapView(
             trackPoints = trackPoints,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(200.dp)
+                .height(280.dp),
+            showFullscreenButton = true,
+            onToggleFullscreen = { isMapFullscreen = true }
         )
 
         Spacer(Modifier.height(12.dp))
@@ -585,38 +577,6 @@ fun MonitorSection(
 }
 
 @Composable
-private fun CompactHeartRateDisplay(heartRate: Int, config: HeartRateAlertLogic.AlertConfig) {
-    val color = heartRateColor(heartRate, config)
-
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .size(100.dp)
-            .background(color = color.copy(alpha = 0.1f), shape = CircleShape)
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                Icons.Default.Favorite,
-                contentDescription = null,
-                tint = color,
-                modifier = Modifier.size(20.dp)
-            )
-            Text(
-                text = if (heartRate > 0) "$heartRate" else "--",
-                fontSize = 32.sp,
-                fontWeight = FontWeight.Bold,
-                color = color
-            )
-            Text(
-                "BPM",
-                style = MaterialTheme.typography.labelSmall,
-                color = color.copy(alpha = 0.7f)
-            )
-        }
-    }
-}
-
-@Composable
 private fun DataCell(
     label: String,
     value: String,
@@ -651,7 +611,9 @@ private fun DataCell(
 @Composable
 fun TrackMapView(
     trackPoints: List<Pair<Double, Double>>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showFullscreenButton: Boolean = false,
+    onToggleFullscreen: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
 
@@ -682,59 +644,114 @@ fun TrackMapView(
         }
     }
 
-    Card(
-        modifier = modifier,
-        shape = RoundedCornerShape(16.dp)
-    ) {
-        AndroidView(
-            factory = { ctx ->
-                Configuration.getInstance().load(ctx, ctx.getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
-                Configuration.getInstance().userAgentValue = ctx.packageName
-                Configuration.getInstance().osmdroidTileCache = File(ctx.cacheDir, "osmdroid")
+    Box(modifier = modifier) {
+        Card(
+            modifier = Modifier.fillMaxSize(),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            AndroidView(
+                factory = { ctx ->
+                    Configuration.getInstance().load(ctx, ctx.getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
+                    Configuration.getInstance().userAgentValue = ctx.packageName
+                    Configuration.getInstance().osmdroidTileCache = File(ctx.cacheDir, "osmdroid")
 
-                MapView(ctx).apply {
-                    setTileSource(gaodeTileSource)
-                    setMultiTouchControls(true)
-                    controller.setZoom(16.0)
-                    // 默认中心：北京
-                    controller.setCenter(GeoPoint(39.9, 116.4))
+                    MapView(ctx).apply {
+                        setTileSource(gaodeTileSource)
+                        setMultiTouchControls(true)
+                        controller.setZoom(16.0)
+                        controller.setCenter(GeoPoint(39.9, 116.4))
 
-                    // 解决地图触摸与外层滚动冲突
-                    setOnTouchListener { v, event ->
-                        when (event.action) {
-                            MotionEvent.ACTION_DOWN -> v.parent?.requestDisallowInterceptTouchEvent(true)
-                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> v.parent?.requestDisallowInterceptTouchEvent(false)
+                        setOnTouchListener { v, event ->
+                            when (event.action) {
+                                MotionEvent.ACTION_DOWN -> v.parent?.requestDisallowInterceptTouchEvent(true)
+                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> v.parent?.requestDisallowInterceptTouchEvent(false)
+                            }
+                            false
                         }
-                        false
                     }
-                }
-            },
-            update = { mapView ->
-                mapView.overlays.removeAll { it is Polyline }
+                },
+                update = { mapView ->
+                    // 清除旧的覆盖物
+                    mapView.overlays.removeAll { it is Polyline || it is Marker }
 
-                if (gcjPoints.size >= 2) {
-                    val polyline = Polyline().apply {
-                        gcjPoints.forEach { (lat, lon) ->
-                            addPoint(GeoPoint(lat, lon))
+                    // 轨迹线
+                    if (gcjPoints.size >= 2) {
+                        val polyline = Polyline().apply {
+                            gcjPoints.forEach { (lat, lon) ->
+                                addPoint(GeoPoint(lat, lon))
+                            }
+                            outlinePaint.color = android.graphics.Color.rgb(25, 118, 210)
+                            outlinePaint.strokeWidth = 10f
+                            outlinePaint.isAntiAlias = true
+                            outlinePaint.strokeCap = android.graphics.Paint.Cap.ROUND
+                            outlinePaint.strokeJoin = android.graphics.Paint.Join.ROUND
                         }
-                        outlinePaint.color = android.graphics.Color.rgb(25, 118, 210)
-                        outlinePaint.strokeWidth = 10f
-                        outlinePaint.isAntiAlias = true
-                        outlinePaint.strokeCap = android.graphics.Paint.Cap.ROUND
-                        outlinePaint.strokeJoin = android.graphics.Paint.Join.ROUND
+                        mapView.overlays.add(polyline)
                     }
-                    mapView.overlays.add(polyline)
-                }
 
-                if (gcjPoints.isNotEmpty()) {
-                    val latest = gcjPoints.last()
-                    mapView.controller.animateTo(GeoPoint(latest.first, latest.second))
-                }
+                    // 实时位置标记
+                    if (gcjPoints.isNotEmpty()) {
+                        val latest = gcjPoints.last()
+                        val latestPoint = GeoPoint(latest.first, latest.second)
 
-                mapView.invalidate()
-            },
-            modifier = Modifier.fillMaxSize()
-        )
+                        val marker = Marker(mapView).apply {
+                            position = latestPoint
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                            title = "当前位置"
+                            icon = android.graphics.drawable.GradientDrawable().apply {
+                                shape = android.graphics.drawable.GradientDrawable.OVAL
+                                setSize(40, 40)
+                                setColor(android.graphics.Color.rgb(25, 118, 210))
+                                setStroke(6, android.graphics.Color.WHITE)
+                            }
+                        }
+                        mapView.overlays.add(marker)
+
+                        // 起点标记（绿色）
+                        if (gcjPoints.size >= 2) {
+                            val start = gcjPoints.first()
+                            val startMarker = Marker(mapView).apply {
+                                position = GeoPoint(start.first, start.second)
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                title = "起点"
+                                icon = android.graphics.drawable.GradientDrawable().apply {
+                                    shape = android.graphics.drawable.GradientDrawable.OVAL
+                                    setSize(30, 30)
+                                    setColor(android.graphics.Color.rgb(76, 175, 80))
+                                    setStroke(4, android.graphics.Color.WHITE)
+                                }
+                            }
+                            mapView.overlays.add(startMarker)
+                        }
+
+                        mapView.controller.animateTo(latestPoint)
+                    }
+
+                    mapView.invalidate()
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+
+        // 全屏切换按钮
+        if (showFullscreenButton && onToggleFullscreen != null) {
+            FilledIconButton(
+                onClick = onToggleFullscreen,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+                    .size(36.dp),
+                colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f)
+                )
+            ) {
+                Icon(
+                    Icons.Default.Fullscreen,
+                    contentDescription = "全屏地图",
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
     }
 }
 
