@@ -10,9 +10,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -22,6 +24,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -64,6 +68,9 @@ fun HeartRunnerApp(viewModel: MainViewModel) {
     val currentSpeed by viewModel.currentSpeed.collectAsStateWithLifecycle()
     val totalDistance by viewModel.totalDistance.collectAsStateWithLifecycle()
     val hasWorkoutToExport by viewModel.hasWorkoutToExport.collectAsStateWithLifecycle()
+    val averageHeartRate by viewModel.averageHeartRate.collectAsStateWithLifecycle()
+    val averagePace by viewModel.averagePace.collectAsStateWithLifecycle()
+    val trackPoints by viewModel.trackPoints.collectAsStateWithLifecycle()
 
     var showSettings by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
@@ -132,6 +139,9 @@ fun HeartRunnerApp(viewModel: MainViewModel) {
                             currentSpeed = currentSpeed,
                             totalDistance = totalDistance,
                             hasWorkoutToExport = hasWorkoutToExport,
+                            averageHeartRate = averageHeartRate,
+                            averagePace = averagePace,
+                            trackPoints = trackPoints,
                             onStartRecording = { viewModel.startRecording() },
                             onStopRecording = { viewModel.stopRecording() },
                             onExport = { showExportDialog = true },
@@ -319,94 +329,153 @@ fun MonitorSection(
     currentSpeed: Float,
     totalDistance: Double,
     hasWorkoutToExport: Boolean,
+    averageHeartRate: Int,
+    averagePace: String,
+    trackPoints: List<Pair<Double, Double>>,
     onStartRecording: () -> Unit,
     onStopRecording: () -> Unit,
     onExport: () -> Unit,
     onDisconnect: () -> Unit
 ) {
-    val context = LocalContext.current
+    val scrollState = rememberScrollState()
 
     Column(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(scrollState),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // 心率大字显示
-        HeartRateDisplay(heartRate = heartRate, config = alertConfig)
-
-        Spacer(Modifier.height(16.dp))
-
-        // 运行时间 & 区间信息
+        // ── 顶部：心率 + 时间 ──
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            InfoChip(label = "时长", value = formatDuration(runDurationSec))
-            InfoChip(label = "区间", value = "${alertConfig.zoneLowPercent}%-${alertConfig.zoneHighPercent}%")
-            InfoChip(
-                label = "范围",
-                value = "${alertConfig.zoneLowBpm}-${alertConfig.zoneHighBpm}"
-            )
-        }
-
-        // 运动数据（录制中或有数据时显示）
-        if (isRecording || hasWorkoutToExport) {
-            Spacer(Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                InfoChip(
-                    label = "速度",
-                    value = String.format("%.1f km/h", currentSpeed)
+            // 心率显示
+            CompactHeartRateDisplay(heartRate = heartRate, config = alertConfig)
+            Spacer(Modifier.width(16.dp))
+            // 运动时间
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "运动时间",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                InfoChip(
-                    label = "距离",
-                    value = if (totalDistance >= 1000) {
-                        String.format("%.2f km", totalDistance / 1000)
-                    } else {
-                        String.format("%.0f m", totalDistance)
-                    }
+                Text(
+                    formatDuration(runDurationSec),
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold
                 )
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(12.dp))
 
-        // 心率曲线
+        // ── 核心数据面板：2x3 网格 ──
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            ),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    DataCell(
+                        label = "里程",
+                        value = if (totalDistance >= 1000) {
+                            String.format("%.2f", totalDistance / 1000)
+                        } else {
+                            String.format("%.0f", totalDistance)
+                        },
+                        unit = if (totalDistance >= 1000) "km" else "m",
+                        modifier = Modifier.weight(1f)
+                    )
+                    DataCell(
+                        label = "当前速度",
+                        value = String.format("%.1f", currentSpeed),
+                        unit = "km/h",
+                        modifier = Modifier.weight(1f)
+                    )
+                    DataCell(
+                        label = "平均配速",
+                        value = averagePace.ifEmpty { "--'--\"" },
+                        unit = "/km",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Spacer(Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    DataCell(
+                        label = "当前心率",
+                        value = if (heartRate > 0) "$heartRate" else "--",
+                        unit = "bpm",
+                        valueColor = heartRateColor(heartRate, alertConfig),
+                        modifier = Modifier.weight(1f)
+                    )
+                    DataCell(
+                        label = "平均心率",
+                        value = if (averageHeartRate > 0) "$averageHeartRate" else "--",
+                        unit = "bpm",
+                        modifier = Modifier.weight(1f)
+                    )
+                    DataCell(
+                        label = "心率区间",
+                        value = "${alertConfig.zoneLowBpm}-${alertConfig.zoneHighBpm}",
+                        unit = "bpm",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        // ── 地图轨迹 ──
+        TrackMapView(
+            trackPoints = trackPoints,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(200.dp)
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        // ── 心率曲线 ──
         if (heartRateHistory.size > 1) {
             HeartRateChart(
                 data = heartRateHistory,
                 config = alertConfig,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(160.dp)
+                    .height(120.dp)
             )
+            Spacer(Modifier.height(12.dp))
         }
 
-        Spacer(Modifier.height(16.dp))
-
-        // 最近播报
+        // ── 最近播报 ──
         if (lastAlert.isNotEmpty()) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.secondaryContainer
-                )
+                ),
+                shape = RoundedCornerShape(12.dp)
             ) {
                 Row(
-                    modifier = Modifier.padding(12.dp),
+                    modifier = Modifier.padding(10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Default.VolumeUp, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Icon(Icons.Default.VolumeUp, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text(lastAlert, style = MaterialTheme.typography.bodyMedium)
+                    Text(lastAlert, style = MaterialTheme.typography.bodySmall)
                 }
             }
+            Spacer(Modifier.height(12.dp))
         }
 
-        Spacer(Modifier.height(16.dp))
-
-        // 录制控制按钮
+        // ── 录制控制按钮 ──
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -452,9 +521,9 @@ fun MonitorSection(
             }
         }
 
-        Spacer(Modifier.weight(1f))
+        Spacer(Modifier.height(8.dp))
 
-        // 断开连接
+        // ── 断开连接 ──
         OutlinedButton(
             onClick = onDisconnect,
             modifier = Modifier
@@ -468,64 +537,189 @@ fun MonitorSection(
             Spacer(Modifier.width(8.dp))
             Text("断开连接")
         }
+
+        Spacer(Modifier.height(8.dp))
     }
 }
 
 @Composable
-fun HeartRateDisplay(heartRate: Int, config: HeartRateAlertLogic.AlertConfig) {
-    val color = when {
-        heartRate <= 0 -> MaterialTheme.colorScheme.onSurface
-        heartRate < config.zoneLowBpm -> Color(0xFF2196F3)  // 蓝色 - 过低
-        heartRate > config.zoneHighBpm -> Color(0xFFF44336) // 红色 - 过高
-        else -> Color(0xFF4CAF50)                            // 绿色 - 正常区间
-    }
+private fun CompactHeartRateDisplay(heartRate: Int, config: HeartRateAlertLogic.AlertConfig) {
+    val color = heartRateColor(heartRate, config)
 
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .size(180.dp)
-                .background(
-                    color = color.copy(alpha = 0.1f),
-                    shape = CircleShape
-                )
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(
-                    Icons.Default.Favorite,
-                    contentDescription = null,
-                    tint = color,
-                    modifier = Modifier.size(36.dp)
-                )
-                Text(
-                    text = if (heartRate > 0) "$heartRate" else "--",
-                    fontSize = 64.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = color
-                )
-                Text(
-                    "BPM",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = color.copy(alpha = 0.7f)
-                )
-            }
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(100.dp)
+            .background(color = color.copy(alpha = 0.1f), shape = CircleShape)
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                Icons.Default.Favorite,
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(20.dp)
+            )
+            Text(
+                text = if (heartRate > 0) "$heartRate" else "--",
+                fontSize = 32.sp,
+                fontWeight = FontWeight.Bold,
+                color = color
+            )
+            Text(
+                "BPM",
+                style = MaterialTheme.typography.labelSmall,
+                color = color.copy(alpha = 0.7f)
+            )
         }
     }
 }
 
 @Composable
-fun InfoChip(label: String, value: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+private fun DataCell(
+    label: String,
+    value: String,
+    unit: String,
+    modifier: Modifier = Modifier,
+    valueColor: Color = MaterialTheme.colorScheme.onSurface
+) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
         Text(
             label,
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        Spacer(Modifier.height(2.dp))
         Text(
             value,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = valueColor
         )
+        Text(
+            unit,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+fun TrackMapView(
+    trackPoints: List<Pair<Double, Double>>,
+    modifier: Modifier = Modifier
+) {
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val surfaceVariantColor = MaterialTheme.colorScheme.surfaceVariant
+    val outlineColor = MaterialTheme.colorScheme.outlineVariant
+    val onSurfaceVariantColor = MaterialTheme.colorScheme.onSurfaceVariant
+
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = surfaceVariantColor.copy(alpha = 0.3f)),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        if (trackPoints.size < 2) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Default.Map,
+                        contentDescription = null,
+                        tint = onSurfaceVariantColor.copy(alpha = 0.4f),
+                        modifier = Modifier.size(36.dp)
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        if (trackPoints.isEmpty()) "开始记录后显示轨迹" else "等待更多GPS数据...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = onSurfaceVariantColor.copy(alpha = 0.5f)
+                    )
+                }
+            }
+        } else {
+            Canvas(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp)
+            ) {
+                val padding = 8.dp.toPx()
+
+                val lats = trackPoints.map { it.first }
+                val lons = trackPoints.map { it.second }
+                val minLat = lats.min()
+                val maxLat = lats.max()
+                val minLon = lons.min()
+                val maxLon = lons.max()
+
+                val latRange = (maxLat - minLat).coerceAtLeast(0.0001)
+                val lonRange = (maxLon - minLon).coerceAtLeast(0.0001)
+
+                val drawWidth = size.width - padding * 2
+                val drawHeight = size.height - padding * 2
+
+                // 保持比例
+                val scaleX = drawWidth / lonRange
+                val scaleY = drawHeight / latRange
+                val scale = minOf(scaleX, scaleY)
+                val offsetX = padding + (drawWidth - lonRange * scale).toFloat() / 2
+                val offsetY = padding + (drawHeight - latRange * scale).toFloat() / 2
+
+                fun toScreen(lat: Double, lon: Double): Offset {
+                    val x = offsetX + ((lon - minLon) * scale).toFloat()
+                    val y = offsetY + ((maxLat - lat) * scale).toFloat() // 翻转Y轴
+                    return Offset(x, y)
+                }
+
+                // 绘制网格
+                for (i in 0..4) {
+                    val y = padding + drawHeight * i / 4
+                    drawLine(outlineColor.copy(alpha = 0.3f), Offset(padding, y), Offset(size.width - padding, y), 0.5.dp.toPx())
+                    val x = padding + drawWidth * i / 4
+                    drawLine(outlineColor.copy(alpha = 0.3f), Offset(x, padding), Offset(x, size.height - padding), 0.5.dp.toPx())
+                }
+
+                // 绘制轨迹
+                val path = Path()
+                trackPoints.forEachIndexed { index, (lat, lon) ->
+                    val pos = toScreen(lat, lon)
+                    if (index == 0) path.moveTo(pos.x, pos.y) else path.lineTo(pos.x, pos.y)
+                }
+
+                drawPath(
+                    path = path,
+                    color = primaryColor,
+                    style = Stroke(
+                        width = 3.dp.toPx(),
+                        cap = StrokeCap.Round,
+                        join = StrokeJoin.Round
+                    )
+                )
+
+                // 起点（绿色）
+                val startPos = toScreen(trackPoints.first().first, trackPoints.first().second)
+                drawCircle(Color(0xFF4CAF50), radius = 6.dp.toPx(), center = startPos)
+                drawCircle(Color.White, radius = 3.dp.toPx(), center = startPos)
+
+                // 当前位置（蓝色）
+                val endPos = toScreen(trackPoints.last().first, trackPoints.last().second)
+                drawCircle(primaryColor, radius = 6.dp.toPx(), center = endPos)
+                drawCircle(Color.White, radius = 3.dp.toPx(), center = endPos)
+            }
+        }
+    }
+}
+
+private fun heartRateColor(heartRate: Int, config: HeartRateAlertLogic.AlertConfig): Color {
+    return when {
+        heartRate <= 0 -> Color.Gray
+        heartRate < config.zoneLowBpm -> Color(0xFF2196F3)
+        heartRate > config.zoneHighBpm -> Color(0xFFF44336)
+        else -> Color(0xFF4CAF50)
     }
 }
 

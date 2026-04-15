@@ -68,7 +68,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _hasWorkoutToExport = MutableStateFlow(false)
     val hasWorkoutToExport: StateFlow<Boolean> = _hasWorkoutToExport.asStateFlow()
 
+    // 平均心率
+    private val _averageHeartRate = MutableStateFlow(0)
+    val averageHeartRate: StateFlow<Int> = _averageHeartRate.asStateFlow()
+
+    // 平均配速 (min/km)
+    private val _averagePace = MutableStateFlow("")
+    val averagePace: StateFlow<String> = _averagePace.asStateFlow()
+
+    // GPS 轨迹点列表 (lat, lon)
+    private val _trackPoints = MutableStateFlow<List<Pair<Double, Double>>>(emptyList())
+    val trackPoints: StateFlow<List<Pair<Double, Double>>> = _trackPoints.asStateFlow()
+
     private val workoutPoints = mutableListOf<WorkoutPoint>()
+    private val heartRateSum = mutableListOf<Int>()
     private var lastLocation: Location? = null
     private var recordingJob: Job? = null
 
@@ -86,6 +99,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     history.add(bpm)
                     if (history.size > 60) history.removeAt(0)
                     _heartRateHistory.value = history
+
+                    // 更新平均心率
+                    if (_isRecording.value) {
+                        heartRateSum.add(bpm)
+                        _averageHeartRate.value = heartRateSum.average().toInt()
+                    }
 
                     // 更新运行时长
                     if (connectedStartTime > 0) {
@@ -172,8 +191,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun startRecording() {
         workoutPoints.clear()
+        heartRateSum.clear()
         _totalDistance.value = 0.0
         _currentSpeed.value = 0f
+        _averageHeartRate.value = 0
+        _averagePace.value = "--'--\""
+        _trackPoints.value = emptyList()
         lastLocation = null
         _isRecording.value = true
         _hasWorkoutToExport.value = false
@@ -194,6 +217,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     workoutPoints.add(point)
                     _currentSpeed.value = location.speed * 3.6f // m/s -> km/h
 
+                    // 更新轨迹
+                    _trackPoints.value = _trackPoints.value + Pair(location.latitude, location.longitude)
+
                     lastLocation?.let { last ->
                         val results = FloatArray(1)
                         Location.distanceBetween(
@@ -202,6 +228,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             results
                         )
                         _totalDistance.value += results[0].toDouble()
+
+                        // 计算平均配速 (min/km)
+                        val distKm = _totalDistance.value / 1000.0
+                        if (distKm > 0.01 && workoutPoints.size >= 2) {
+                            val elapsedMin = (workoutPoints.last().timestamp - workoutPoints.first().timestamp) / 60000.0
+                            val paceMinPerKm = elapsedMin / distKm
+                            val paceMin = paceMinPerKm.toInt()
+                            val paceSec = ((paceMinPerKm - paceMin) * 60).toInt()
+                            _averagePace.value = "${paceMin}'${String.format("%02d", paceSec)}\""
+                        }
                     }
                     lastLocation = location
                 }
@@ -244,9 +280,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearWorkout() {
         workoutPoints.clear()
+        heartRateSum.clear()
         _hasWorkoutToExport.value = false
         _totalDistance.value = 0.0
         _currentSpeed.value = 0f
+        _averageHeartRate.value = 0
+        _averagePace.value = ""
+        _trackPoints.value = emptyList()
     }
 
     private fun startForegroundService() {
