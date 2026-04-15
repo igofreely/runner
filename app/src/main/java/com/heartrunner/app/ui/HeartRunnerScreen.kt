@@ -113,42 +113,32 @@ fun HeartRunnerApp(viewModel: MainViewModel) {
         ) {
             if (!permissionState.allPermissionsGranted) {
                 PermissionCard(onRequest = { permissionState.launchMultiplePermissionRequest() })
+            } else if (connectionState == ConnectionState.CONNECTING) {
+                ConnectingSection()
             } else {
-                when (connectionState) {
-                    ConnectionState.DISCONNECTED,
-                    ConnectionState.SCANNING -> {
-                        ScanSection(
-                            isScanning = connectionState == ConnectionState.SCANNING,
-                            devices = scannedDevices,
-                            onStartScan = { viewModel.startScan() },
-                            onStopScan = { viewModel.stopScan() },
-                            onConnect = { viewModel.connectDevice(it) }
-                        )
-                    }
-                    ConnectionState.CONNECTING -> {
-                        ConnectingSection()
-                    }
-                    ConnectionState.CONNECTED -> {
-                        MonitorSection(
-                            heartRate = heartRate,
-                            heartRateHistory = heartRateHistory,
-                            runDurationSec = runDuration,
-                            lastAlert = lastAlert,
-                            alertConfig = alertConfig,
-                            isRecording = isRecording,
-                            currentSpeed = currentSpeed,
-                            totalDistance = totalDistance,
-                            hasWorkoutToExport = hasWorkoutToExport,
-                            averageHeartRate = averageHeartRate,
-                            averagePace = averagePace,
-                            trackPoints = trackPoints,
-                            onStartRecording = { viewModel.startRecording() },
-                            onStopRecording = { viewModel.stopRecording() },
-                            onExport = { showExportDialog = true },
-                            onDisconnect = { viewModel.disconnect() }
-                        )
-                    }
-                }
+                MonitorSection(
+                    connectionState = connectionState,
+                    heartRate = heartRate,
+                    heartRateHistory = heartRateHistory,
+                    runDurationSec = runDuration,
+                    lastAlert = lastAlert,
+                    alertConfig = alertConfig,
+                    isRecording = isRecording,
+                    currentSpeed = currentSpeed,
+                    totalDistance = totalDistance,
+                    hasWorkoutToExport = hasWorkoutToExport,
+                    averageHeartRate = averageHeartRate,
+                    averagePace = averagePace,
+                    trackPoints = trackPoints,
+                    scannedDevices = scannedDevices,
+                    onStartScan = { viewModel.startScan() },
+                    onStopScan = { viewModel.stopScan() },
+                    onConnect = { viewModel.connectDevice(it) },
+                    onStartRecording = { viewModel.startRecording() },
+                    onStopRecording = { viewModel.stopRecording() },
+                    onExport = { showExportDialog = true },
+                    onDisconnect = { viewModel.disconnect() }
+                )
             }
         }
     }
@@ -320,6 +310,7 @@ fun ConnectingSection() {
 
 @Composable
 fun MonitorSection(
+    connectionState: ConnectionState,
     heartRate: Int,
     heartRateHistory: List<Int>,
     runDurationSec: Long,
@@ -332,11 +323,17 @@ fun MonitorSection(
     averageHeartRate: Int,
     averagePace: String,
     trackPoints: List<Pair<Double, Double>>,
+    scannedDevices: List<com.heartrunner.app.ble.ScannedDevice>,
+    onStartScan: () -> Unit,
+    onStopScan: () -> Unit,
+    onConnect: (String) -> Unit,
     onStartRecording: () -> Unit,
     onStopRecording: () -> Unit,
     onExport: () -> Unit,
     onDisconnect: () -> Unit
 ) {
+    val isConnected = connectionState == ConnectionState.CONNECTED
+    val isScanning = connectionState == ConnectionState.SCANNING
     val scrollState = rememberScrollState()
 
     Column(
@@ -475,7 +472,7 @@ fun MonitorSection(
             Spacer(Modifier.height(12.dp))
         }
 
-        // ── 录制控制按钮 ──
+        // ── 录制控制（始终显示）──
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -523,19 +520,52 @@ fun MonitorSection(
 
         Spacer(Modifier.height(8.dp))
 
-        // ── 断开连接 ──
-        OutlinedButton(
-            onClick = onDisconnect,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(48.dp),
-            colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = MaterialTheme.colorScheme.error
-            )
-        ) {
-            Icon(Icons.Default.BluetoothDisabled, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("断开连接")
+        // ── 蓝牙连接控制 ──
+        if (isConnected) {
+            OutlinedButton(
+                onClick = onDisconnect,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                )
+            ) {
+                Icon(Icons.Default.BluetoothDisabled, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("断开连接")
+            }
+        } else {
+            OutlinedButton(
+                onClick = { if (isScanning) onStopScan() else onStartScan() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                if (isScanning) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("停止扫描")
+                } else {
+                    Icon(Icons.Default.BluetoothSearching, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("扫描心率带")
+                }
+            }
+
+            // 扫描到的设备列表
+            if (scannedDevices.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                scannedDevices.forEach { device ->
+                    DeviceCard(device = device, onClick = { onConnect(device.address) })
+                    Spacer(Modifier.height(4.dp))
+                }
+            }
         }
 
         Spacer(Modifier.height(8.dp))

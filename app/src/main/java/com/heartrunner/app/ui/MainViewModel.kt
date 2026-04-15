@@ -84,6 +84,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val heartRateSum = mutableListOf<Int>()
     private var lastLocation: Location? = null
     private var recordingJob: Job? = null
+    private var recordingTimerJob: Job? = null
+    private var recordingStartTime = 0L
 
     private var serviceConnection: ServiceConnection? = null
     private var heartRateService: HeartRateService? = null
@@ -104,11 +106,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (_isRecording.value) {
                         heartRateSum.add(bpm)
                         _averageHeartRate.value = heartRateSum.average().toInt()
-                    }
-
-                    // 更新运行时长
-                    if (connectedStartTime > 0) {
-                        _runDurationSec.value = (System.currentTimeMillis() - connectedStartTime) / 1000
                     }
 
                     // 告警判断
@@ -197,10 +194,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _averageHeartRate.value = 0
         _averagePace.value = "--'--\""
         _trackPoints.value = emptyList()
+        _runDurationSec.value = 0L
         lastLocation = null
         _isRecording.value = true
         _hasWorkoutToExport.value = false
+        recordingStartTime = System.currentTimeMillis()
         locationTracker.startTracking()
+        startForegroundService()
+
+        // 独立的录制计时器，每秒更新
+        recordingTimerJob = viewModelScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(1000)
+                _runDurationSec.value = (System.currentTimeMillis() - recordingStartTime) / 1000
+            }
+        }
 
         recordingJob = viewModelScope.launch {
             locationTracker.currentLocation.collect { location ->
@@ -249,7 +257,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _isRecording.value = false
         recordingJob?.cancel()
         recordingJob = null
+        recordingTimerJob?.cancel()
+        recordingTimerJob = null
+        recordingStartTime = 0L
         locationTracker.stopTracking()
+        stopForegroundService()
         _hasWorkoutToExport.value = workoutPoints.isNotEmpty()
     }
 
@@ -287,6 +299,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _averageHeartRate.value = 0
         _averagePace.value = ""
         _trackPoints.value = emptyList()
+        _runDurationSec.value = 0L
     }
 
     private fun startForegroundService() {
