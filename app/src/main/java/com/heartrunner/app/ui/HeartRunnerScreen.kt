@@ -41,6 +41,7 @@ import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.heartrunner.app.ble.ConnectionState
 import com.heartrunner.app.export.ExportFormat
+import com.heartrunner.app.tts.BroadcastConfig
 import com.heartrunner.app.tts.HeartRateAlertLogic
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
@@ -84,9 +85,11 @@ fun HeartRunnerApp(viewModel: MainViewModel) {
     val averageHeartRate by viewModel.averageHeartRate.collectAsStateWithLifecycle()
     val averagePace by viewModel.averagePace.collectAsStateWithLifecycle()
     val trackPoints by viewModel.trackPoints.collectAsStateWithLifecycle()
+    val broadcastConfig by viewModel.broadcastConfig.collectAsStateWithLifecycle()
 
     var showSettings by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
+    var showBroadcastSettings by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         if (!permissionState.allPermissionsGranted) {
@@ -108,6 +111,10 @@ fun HeartRunnerApp(viewModel: MainViewModel) {
                             if (ttsEnabled) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
                             contentDescription = "语音开关"
                         )
+                    }
+                    // 播报设置
+                    IconButton(onClick = { showBroadcastSettings = true }) {
+                        Icon(Icons.Default.Campaign, contentDescription = "播报设置")
                     }
                     // 设置
                     IconButton(onClick = { showSettings = true }) {
@@ -154,6 +161,17 @@ fun HeartRunnerApp(viewModel: MainViewModel) {
                 )
             }
         }
+    }
+
+    if (showBroadcastSettings) {
+        BroadcastSettingsDialog(
+            config = broadcastConfig,
+            onDismiss = { showBroadcastSettings = false },
+            onSave = { config ->
+                viewModel.updateBroadcastConfig(config)
+                showBroadcastSettings = false
+            }
+        )
     }
 
     if (showSettings) {
@@ -941,6 +959,151 @@ fun SettingsDialog(
             }
         }
     )
+}
+
+@Composable
+fun BroadcastSettingsDialog(
+    config: BroadcastConfig,
+    onDismiss: () -> Unit,
+    onSave: (BroadcastConfig) -> Unit
+) {
+    var enabled by remember { mutableStateOf(config.enabled) }
+    var triggerMode by remember { mutableStateOf(config.triggerMode) }
+    var distanceInterval by remember { mutableStateOf(config.distanceIntervalKm.toString()) }
+    var timeInterval by remember { mutableStateOf(config.timeIntervalMin.toString()) }
+    var announceSpeed by remember { mutableStateOf(config.announceSpeed) }
+    var announceDistance by remember { mutableStateOf(config.announceDistance) }
+    var announceTime by remember { mutableStateOf(config.announceTime) }
+    var announceHeartRate by remember { mutableStateOf(config.announceHeartRate) }
+    var announceAvgHeartRate by remember { mutableStateOf(config.announceAvgHeartRate) }
+    var announceAvgSpeed by remember { mutableStateOf(config.announceAvgSpeed) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("运动播报设置") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // 总开关
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("启用运动播报", style = MaterialTheme.typography.titleSmall)
+                    Switch(checked = enabled, onCheckedChange = { enabled = it })
+                }
+
+                HorizontalDivider()
+
+                // 触发方式
+                Text("播报触发方式", style = MaterialTheme.typography.titleSmall)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = triggerMode == BroadcastConfig.TriggerMode.DISTANCE,
+                        onClick = { triggerMode = BroadcastConfig.TriggerMode.DISTANCE },
+                        label = { Text("按距离") },
+                        modifier = Modifier.weight(1f)
+                    )
+                    FilterChip(
+                        selected = triggerMode == BroadcastConfig.TriggerMode.TIME,
+                        onClick = { triggerMode = BroadcastConfig.TriggerMode.TIME },
+                        label = { Text("按时间") },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                // 间隔设置
+                if (triggerMode == BroadcastConfig.TriggerMode.DISTANCE) {
+                    OutlinedTextField(
+                        value = distanceInterval,
+                        onValueChange = { distanceInterval = it.filter { c -> c.isDigit() || c == '.' } },
+                        label = { Text("距离间隔") },
+                        suffix = { Text("公里") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    OutlinedTextField(
+                        value = timeInterval,
+                        onValueChange = { timeInterval = it.filter { c -> c.isDigit() } },
+                        label = { Text("时间间隔") },
+                        suffix = { Text("分钟") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                HorizontalDivider()
+
+                // 播报项目
+                Text("播报内容", style = MaterialTheme.typography.titleSmall)
+                BroadcastCheckbox("时间", announceTime) { announceTime = it }
+                BroadcastCheckbox("里程", announceDistance) { announceDistance = it }
+                BroadcastCheckbox("速度", announceSpeed) { announceSpeed = it }
+                BroadcastCheckbox("平均速度", announceAvgSpeed) { announceAvgSpeed = it }
+                BroadcastCheckbox("心率", announceHeartRate) { announceHeartRate = it }
+                BroadcastCheckbox("平均心率", announceAvgHeartRate) { announceAvgHeartRate = it }
+
+                Text(
+                    "提示: 心率区间告警优先级更高，会打断播报",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val newConfig = BroadcastConfig(
+                        enabled = enabled,
+                        triggerMode = triggerMode,
+                        distanceIntervalKm = distanceInterval.toDoubleOrNull() ?: 1.0,
+                        timeIntervalMin = timeInterval.toIntOrNull() ?: 5,
+                        announceSpeed = announceSpeed,
+                        announceDistance = announceDistance,
+                        announceTime = announceTime,
+                        announceHeartRate = announceHeartRate,
+                        announceAvgHeartRate = announceAvgHeartRate,
+                        announceAvgSpeed = announceAvgSpeed
+                    )
+                    onSave(newConfig)
+                }
+            ) {
+                Text("保存")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
+}
+
+@Composable
+private fun BroadcastCheckbox(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) },
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+        Checkbox(checked = checked, onCheckedChange = onCheckedChange)
+    }
 }
 
 @Composable

@@ -21,6 +21,7 @@ import com.heartrunner.app.location.LocationTracker
 import com.heartrunner.app.service.HeartRateService
 import com.heartrunner.app.tts.HeartRateAlertLogic
 import com.heartrunner.app.tts.TtsAlertManager
+import com.heartrunner.app.tts.BroadcastConfig
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -80,12 +81,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _trackPoints = MutableStateFlow<List<Pair<Double, Double>>>(emptyList())
     val trackPoints: StateFlow<List<Pair<Double, Double>>> = _trackPoints.asStateFlow()
 
+    // 运动播报配置
+    private val _broadcastConfig = MutableStateFlow(BroadcastConfig())
+    val broadcastConfig: StateFlow<BroadcastConfig> = _broadcastConfig.asStateFlow()
+
     private val workoutPoints = mutableListOf<WorkoutPoint>()
     private val heartRateSum = mutableListOf<Int>()
     private var lastLocation: Location? = null
     private var recordingJob: Job? = null
     private var recordingTimerJob: Job? = null
     private var recordingStartTime = 0L
+    private var lastBroadcastDistance = 0.0
+    private var lastBroadcastTime = 0L
+    @Volatile
+    private var isSpeakingZoneAlert = false
 
     private var serviceConnection: ServiceConnection? = null
     private var heartRateService: HeartRateService? = null
@@ -120,7 +129,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 HeartRateAlertLogic.AlertResult.None -> null
                             }
                             if (msg != null) {
-                                ttsManager.speak(msg)
+                                ttsManager.speakNow(msg)
                                 _lastAlert.value = msg
                             }
                         }
@@ -179,6 +188,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         alertLogic.reset()
     }
 
+    fun updateBroadcastConfig(config: BroadcastConfig) {
+        _broadcastConfig.value = config
+    }
+
     fun toggleTts() {
         _ttsEnabled.value = !_ttsEnabled.value
         if (!_ttsEnabled.value) {
@@ -199,14 +212,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _isRecording.value = true
         _hasWorkoutToExport.value = false
         recordingStartTime = System.currentTimeMillis()
+        lastBroadcastDistance = 0.0
+        lastBroadcastTime = System.currentTimeMillis()
         locationTracker.startTracking()
         startForegroundService()
 
-        // 独立的录制计时器，每秒更新
+        // 独立的录制计时器，每秒更新 + 检查时间播报
         recordingTimerJob = viewModelScope.launch {
             while (true) {
                 kotlinx.coroutines.delay(1000)
                 _runDurationSec.value = (System.currentTimeMillis() - recordingStartTime) / 1000
+                checkTimeBroadcast()
             }
         }
 
@@ -246,10 +262,81 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             val paceSec = ((paceMinPerKm - paceMin) * 60).toInt()
                             _averagePace.value = "${paceMin}'${String.format("%02d", paceSec)}\""
                         }
+
+                        // 检查距离播报
+                        checkDistanceBroadcast()
                     }
                     lastLocation = location
                 }
             }
+        }
+    }
+
+    private fun checkDistanceBroadcast() {
+        val config = _broadcastConfig.value
+        if (!config.enabled || config.triggerMode != BroadcastConfig.TriggerMode.DISTANCE) return
+        if (!_ttsEnabled.value || !_isRecording.value) return
+
+        val distKm = _totalDistance.value / 1000.0
+        val nextTrigger = lastBroadcastDistance + config.distanceIntervalKm
+        if (distKm >= nextTrigger) {
+            lastBroadcastDistance = (distKm / config.distanceIntervalKm).toInt() * config.distanceIntervalKm
+            performBroadcast()
+        }
+    }
+
+    private fun checkTimeBroadcast() {
+        val config = _broadcastConfig.value
+        if (!config.enabled || config.triggerMode != BroadcastConfig.TriggerMode.TIME) return
+        if (!_ttsEnabled.value || !_isRecording.value) return
+
+        val now = System.currentTimeMillis()
+        if (now - lastBroadcastTime >= config.timeIntervalMin * 60_000L) {
+            lastBroadcastTime = now
+            performBroadcast()
+        }
+    }
+
+    private fun performBroadcast() {
+        val config = _broadcastConfig.value
+        val parts = mutableListOf<String>()
+
+        if (config.announceTime) {
+            val sec = _runDurationSec.value
+            val min = sec / 60
+            val h = min / 60
+            val m = min % 60
+            parts.add(if (h > 0) "运动${h}小时${m}分钟" else "运动${m}分钟")
+        }
+        if (config.announceDistance) {
+            val distKm = _totalDistance.value / 1000.0
+            parts.add(if (distKm >= 1.0) String.format("里程%.1f公里", distKm) else String.format("里程%.0f米", _totalDistance.value))
+        }
+        if (config.announceSpeed) {
+            parts.add(String.format("速度%.1f公里每小时", _currentSpeed.value))
+        }
+        if (config.announceAvgSpeed) {
+            val sec = _runDurationSec.value
+            val distKm = _totalDistance.value / 1000.0
+            if (sec > 0 && distKm > 0.01) {
+                val avgSpd = distKm / (sec / 3600.0)
+                parts.add(String.format("平均速度%.1f公里每小时", avgSpd))
+            }
+        }
+        if (config.announceHeartRate) {
+            val hr = bleManager.heartRate.value
+            if (hr > 0) parts.add("心率${hr}")
+        }
+        if (config.announceAvgHeartRate) {
+            val avg = _averageHeartRate.value
+            if (avg > 0) parts.add("平均心率${avg}")
+        }
+
+        if (parts.isNotEmpty()) {
+            val text = parts.joinToString("，")
+            // 使用 QUEUE_ADD，心率区间告警用 speakNow(QUEUE_FLUSH) 会覆盖
+            ttsManager.speak(text)
+            _lastAlert.value = text
         }
     }
 
