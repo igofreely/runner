@@ -6,14 +6,12 @@ import android.content.Intent
 import android.os.Build
 import android.view.MotionEvent
 import androidx.compose.animation.*
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -23,35 +21,29 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.heartrunner.app.ble.ConnectionState
 import com.heartrunner.app.export.ExportFormat
+import com.heartrunner.app.location.CoordinateConverter
 import com.heartrunner.app.tts.BroadcastConfig
 import com.heartrunner.app.tts.HeartRateAlertLogic
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.util.MapTileIndex
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
-import com.heartrunner.app.location.CoordinateConverter
 import java.io.File
 
 @OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class)
@@ -73,7 +65,6 @@ fun HeartRunnerApp(viewModel: MainViewModel) {
     val connectionState by viewModel.bleManager.connectionState.collectAsStateWithLifecycle()
     val heartRate by viewModel.bleManager.heartRate.collectAsStateWithLifecycle()
     val scannedDevices by viewModel.bleManager.scannedDevices.collectAsStateWithLifecycle()
-    val heartRateHistory by viewModel.heartRateHistory.collectAsStateWithLifecycle()
     val runDuration by viewModel.runDurationSec.collectAsStateWithLifecycle()
     val lastAlert by viewModel.lastAlert.collectAsStateWithLifecycle()
     val ttsEnabled by viewModel.ttsEnabled.collectAsStateWithLifecycle()
@@ -105,6 +96,9 @@ fun HeartRunnerApp(viewModel: MainViewModel) {
                     containerColor = MaterialTheme.colorScheme.primaryContainer
                 ),
                 actions = {
+                    IconButton(onClick = { viewModel.testTts() }) {
+                        Icon(Icons.Default.RecordVoiceOver, contentDescription = "测试语音")
+                    }
                     // TTS 开关
                     IconButton(onClick = { viewModel.toggleTts() }) {
                         Icon(
@@ -139,7 +133,6 @@ fun HeartRunnerApp(viewModel: MainViewModel) {
                 MonitorSection(
                     connectionState = connectionState,
                     heartRate = heartRate,
-                    heartRateHistory = heartRateHistory,
                     runDurationSec = runDuration,
                     lastAlert = lastAlert,
                     alertConfig = alertConfig,
@@ -343,7 +336,6 @@ fun ConnectingSection() {
 fun MonitorSection(
     connectionState: ConnectionState,
     heartRate: Int,
-    heartRateHistory: List<Int>,
     runDurationSec: Long,
     lastAlert: String,
     alertConfig: HeartRateAlertLogic.AlertConfig,
@@ -365,8 +357,14 @@ fun MonitorSection(
 ) {
     val isConnected = connectionState == ConnectionState.CONNECTED
     val isScanning = connectionState == ConnectionState.SCANNING
-    val scrollState = rememberScrollState()
     var isMapFullscreen by remember { mutableStateOf(false) }
+    val onBleControlClick = {
+        when {
+            isConnected -> onDisconnect()
+            isScanning -> onStopScan()
+            else -> onStartScan()
+        }
+    }
 
     // 全屏地图模式
     if (isMapFullscreen) {
@@ -375,16 +373,24 @@ fun MonitorSection(
                 trackPoints = trackPoints,
                 modifier = Modifier.fillMaxSize(),
                 showFullscreenButton = true,
-                onToggleFullscreen = { isMapFullscreen = false }
+                onToggleFullscreen = { isMapFullscreen = false },
+                overlayContent = {
+                    MapActionOverlay(
+                        isRecording = isRecording,
+                        isConnected = isConnected,
+                        isScanning = isScanning,
+                        onStartRecording = onStartRecording,
+                        onStopRecording = onStopRecording,
+                        onBleControlClick = onBleControlClick
+                    )
+                }
             )
         }
         return
     }
 
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(scrollState),
+        modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         // ── 核心数据面板：2x3 网格 ──
@@ -449,30 +455,6 @@ fun MonitorSection(
 
         Spacer(Modifier.height(8.dp))
 
-        // ── 地图轨迹 ──
-        TrackMapView(
-            trackPoints = trackPoints,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(280.dp),
-            showFullscreenButton = true,
-            onToggleFullscreen = { isMapFullscreen = true }
-        )
-
-        Spacer(Modifier.height(12.dp))
-
-        // ── 心率曲线 ──
-        if (heartRateHistory.size > 1) {
-            HeartRateChart(
-                data = heartRateHistory,
-                config = alertConfig,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(120.dp)
-            )
-            Spacer(Modifier.height(12.dp))
-        }
-
         // ── 最近播报 ──
         if (lastAlert.isNotEmpty()) {
             Card(
@@ -494,103 +476,204 @@ fun MonitorSection(
             Spacer(Modifier.height(12.dp))
         }
 
-        // ── 录制控制（始终显示）──
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            if (isRecording) {
-                Button(
-                    onClick = onStopRecording,
-                    modifier = Modifier.weight(1f).height(48.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error
-                    ),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.Stop, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("停止记录")
-                }
-            } else {
-                Button(
-                    onClick = onStartRecording,
-                    modifier = Modifier.weight(1f).height(48.dp),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.FiberManualRecord, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("开始记录")
-                }
-            }
-
-            if (hasWorkoutToExport && !isRecording) {
-                Button(
-                    onClick = onExport,
-                    modifier = Modifier.weight(1f).height(48.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.tertiary
-                    )
-                ) {
-                    Icon(Icons.Default.FileDownload, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("导出")
-                }
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
-
-        // ── 蓝牙连接控制 ──
-        if (isConnected) {
-            OutlinedButton(
-                onClick = onDisconnect,
+        if (hasWorkoutToExport && !isRecording) {
+            Button(
+                onClick = onExport,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.tertiary
                 )
             ) {
-                Icon(Icons.Default.BluetoothDisabled, contentDescription = null)
+                Icon(Icons.Default.FileDownload, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text("断开连接")
-            }
-        } else {
-            OutlinedButton(
-                onClick = { if (isScanning) onStopScan() else onStartScan() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                if (isScanning) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        color = MaterialTheme.colorScheme.primary,
-                        strokeWidth = 2.dp
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text("停止扫描")
-                } else {
-                    Icon(Icons.Default.BluetoothSearching, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("扫描心率带")
-                }
+                Text("导出")
             }
 
-            // 扫描到的设备列表
-            if (scannedDevices.isNotEmpty()) {
-                Spacer(Modifier.height(8.dp))
-                scannedDevices.forEach { device ->
+            Spacer(Modifier.height(12.dp))
+        }
+
+        if (!isConnected && isScanning && scannedDevices.isEmpty()) {
+            Text(
+                "正在搜索附近的BLE心率设备...",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+
+        if (!isConnected && scannedDevices.isNotEmpty()) {
+            Text(
+                "点击已发现的设备完成连接",
+                modifier = Modifier.fillMaxWidth(),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Start
+            )
+            Spacer(Modifier.height(8.dp))
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 180.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                items(scannedDevices, key = { it.address }) { device ->
                     DeviceCard(device = device, onClick = { onConnect(device.address) })
-                    Spacer(Modifier.height(4.dp))
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+
+        // ── 地图轨迹 ──
+        TrackMapView(
+            trackPoints = trackPoints,
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            showFullscreenButton = true,
+            onToggleFullscreen = { isMapFullscreen = true },
+            overlayContent = {
+                MapActionOverlay(
+                    isRecording = isRecording,
+                    isConnected = isConnected,
+                    isScanning = isScanning,
+                    onStartRecording = onStartRecording,
+                    onStopRecording = onStopRecording,
+                    onBleControlClick = onBleControlClick
+                )
+            }
+        )
+    }
+}
+
+@Composable
+private fun BoxScope.MapActionOverlay(
+    isRecording: Boolean,
+    isConnected: Boolean,
+    isScanning: Boolean,
+    onStartRecording: () -> Unit,
+    onStopRecording: () -> Unit,
+    onBleControlClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .padding(12.dp)
+            .fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+        tonalElevation = 8.dp,
+        shadowElevation = 12.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Button(
+                onClick = if (isRecording) onStopRecording else onStartRecording,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isRecording) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    }
+                ),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Icon(
+                    if (isRecording) Icons.Default.Stop else Icons.Default.FiberManualRecord,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (isRecording) "停止记录" else "开始记录",
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            FilledTonalButton(
+                onClick = onBleControlClick,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(48.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                colors = ButtonDefaults.filledTonalButtonColors(
+                    containerColor = if (isConnected) {
+                        MaterialTheme.colorScheme.errorContainer
+                    } else {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    },
+                    contentColor = if (isConnected) {
+                        MaterialTheme.colorScheme.onErrorContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSecondaryContainer
+                    }
+                ),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                when {
+                    isConnected -> {
+                        Icon(
+                            Icons.Default.BluetoothDisabled,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "断开心率带",
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    isScanning -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "停止扫描",
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    else -> {
+                        Icon(
+                            Icons.Default.BluetoothSearching,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "扫描心率带",
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
         }
-
-        Spacer(Modifier.height(8.dp))
     }
 }
 
@@ -631,7 +714,8 @@ fun TrackMapView(
     trackPoints: List<Pair<Double, Double>>,
     modifier: Modifier = Modifier,
     showFullscreenButton: Boolean = false,
-    onToggleFullscreen: (() -> Unit)? = null
+    onToggleFullscreen: (() -> Unit)? = null,
+    overlayContent: @Composable BoxScope.() -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -770,6 +854,8 @@ fun TrackMapView(
                 )
             }
         }
+
+        overlayContent()
     }
 }
 
@@ -779,81 +865,6 @@ private fun heartRateColor(heartRate: Int, config: HeartRateAlertLogic.AlertConf
         heartRate < config.zoneLowBpm -> Color(0xFF2196F3)
         heartRate > config.zoneHighBpm -> Color(0xFFF44336)
         else -> Color(0xFF4CAF50)
-    }
-}
-
-@Composable
-fun HeartRateChart(
-    data: List<Int>,
-    config: HeartRateAlertLogic.AlertConfig,
-    modifier: Modifier = Modifier
-) {
-    val primaryColor = MaterialTheme.colorScheme.primary
-    val errorColor = MaterialTheme.colorScheme.error
-    val zoneLow = config.zoneLowBpm.toFloat()
-    val zoneHigh = config.zoneHighBpm.toFloat()
-
-    Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        )
-    ) {
-        Canvas(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(12.dp)
-        ) {
-            if (data.size < 2) return@Canvas
-
-            val minHr = (data.minOrNull() ?: 50).coerceAtMost(50).toFloat()
-            val maxHr = (data.maxOrNull() ?: 200).coerceAtLeast(200).toFloat()
-            val range = maxHr - minHr
-
-            val stepX = size.width / (data.size - 1).coerceAtLeast(1)
-
-            // 画区间线
-            val lowY = size.height - ((zoneLow - minHr) / range) * size.height
-            val highY = size.height - ((zoneHigh - minHr) / range) * size.height
-
-            drawLine(
-                color = Color.Green.copy(alpha = 0.3f),
-                start = Offset(0f, lowY),
-                end = Offset(size.width, lowY),
-                strokeWidth = 1.dp.toPx()
-            )
-            drawLine(
-                color = Color.Red.copy(alpha = 0.3f),
-                start = Offset(0f, highY),
-                end = Offset(size.width, highY),
-                strokeWidth = 1.dp.toPx()
-            )
-
-            // 画心率曲线
-            val path = Path()
-            data.forEachIndexed { index, hr ->
-                val x = index * stepX
-                val y = size.height - ((hr.toFloat() - minHr) / range) * size.height
-                if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
-            }
-
-            drawPath(
-                path = path,
-                color = primaryColor,
-                style = Stroke(width = 2.dp.toPx())
-            )
-
-            // 画当前点
-            if (data.isNotEmpty()) {
-                val lastX = (data.size - 1) * stepX
-                val lastY = size.height - ((data.last().toFloat() - minHr) / range) * size.height
-                drawCircle(
-                    color = if (data.last() > config.zoneHighBpm) errorColor else primaryColor,
-                    radius = 4.dp.toPx(),
-                    center = Offset(lastX, lastY)
-                )
-            }
-        }
     }
 }
 

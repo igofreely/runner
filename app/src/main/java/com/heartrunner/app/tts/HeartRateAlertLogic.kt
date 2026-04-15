@@ -38,7 +38,12 @@ class HeartRateAlertLogic {
     private var lastZoneAlertTime = 0L
     private var currentZone = -1
 
-    fun evaluate(bpm: Int, config: AlertConfig, currentTimeMillis: Long): List<AlertResult> {
+    fun evaluate(
+        bpm: Int,
+        config: AlertConfig,
+        currentTimeMillis: Long,
+        suppressZoneBoundaryAlerts: Boolean = false
+    ): List<AlertResult> {
         if (bpm <= 0) return listOf(AlertResult.None)
 
         val results = mutableListOf<AlertResult>()
@@ -53,13 +58,19 @@ class HeartRateAlertLogic {
         // 区间告警
         if (now - lastZoneAlertTime >= config.zoneAlertInterval * 1000L) {
             if (config.isValid()) {
-                // 有有效配置时，检查是否超出区间
+                val zoneAlert = when {
+                    bpm < config.zoneLowBpm -> AlertResult.ZoneTooLow(bpm, config.zoneLowBpm)
+                    bpm > config.zoneHighBpm -> AlertResult.ZoneTooHigh(bpm, config.zoneHighBpm)
+                    else -> null
+                }
+
                 when {
-                    bpm < config.zoneLowBpm -> {
-                        results.add(AlertResult.ZoneTooLow(bpm, config.zoneLowBpm))
+                    zoneAlert != null && !suppressZoneBoundaryAlerts -> {
+                        results.add(zoneAlert)
+                        lastZoneAlertTime = now
                     }
-                    bpm > config.zoneHighBpm -> {
-                        results.add(AlertResult.ZoneTooHigh(bpm, config.zoneHighBpm))
+                    zoneAlert == null -> {
+                        lastZoneAlertTime = now
                     }
                 }
             } else {
@@ -69,8 +80,8 @@ class HeartRateAlertLogic {
                     currentZone = zone
                     results.add(AlertResult.ZoneChanged(zone))
                 }
+                lastZoneAlertTime = now
             }
-            lastZoneAlertTime = now
         }
 
         return results.ifEmpty { listOf(AlertResult.None) }

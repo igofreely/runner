@@ -93,8 +93,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var recordingStartTime = 0L
     private var lastBroadcastDistance = 0.0
     private var lastBroadcastTime = 0L
-    @Volatile
-    private var isSpeakingZoneAlert = false
 
     private var serviceConnection: ServiceConnection? = null
     private var heartRateService: HeartRateService? = null
@@ -119,7 +117,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                     // 告警判断
                     if (_ttsEnabled.value) {
-                        val results = alertLogic.evaluate(bpm, _alertConfig.value, System.currentTimeMillis())
+                        val results = alertLogic.evaluate(
+                            bpm = bpm,
+                            config = _alertConfig.value,
+                            currentTimeMillis = System.currentTimeMillis(),
+                            suppressZoneBoundaryAlerts = ttsManager.hasActiveWorkoutBroadcast()
+                        )
                         for (result in results) {
                             val msg = when (result) {
                                 is HeartRateAlertLogic.AlertResult.HeartRateReport -> "心率${result.bpm}"
@@ -197,6 +200,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (!_ttsEnabled.value) {
             ttsManager.stop()
         }
+    }
+
+    fun testTts() {
+        if (!_ttsEnabled.value) {
+            _ttsEnabled.value = true
+        }
+        val text = "语音测试"
+        ttsManager.speakNow(text)
+        _lastAlert.value = text
     }
 
     fun startRecording() {
@@ -334,8 +346,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         if (parts.isNotEmpty()) {
             val text = parts.joinToString("，")
-            // 使用 QUEUE_ADD，心率区间告警用 speakNow(QUEUE_FLUSH) 会覆盖
-            ttsManager.speak(text)
+            // 使用专门的运动播报类别，在播放期间暂停低/高心率告警，避免被 QUEUE_FLUSH 打断。
+            ttsManager.speak(text, TtsAlertManager.UtteranceCategory.WORKOUT_BROADCAST)
             _lastAlert.value = text
         }
     }
