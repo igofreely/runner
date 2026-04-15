@@ -1,8 +1,10 @@
 package com.heartrunner.app.ui
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.view.MotionEvent
 import androidx.compose.animation.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -33,12 +35,22 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.heartrunner.app.ble.ConnectionState
 import com.heartrunner.app.export.ExportFormat
 import com.heartrunner.app.tts.HeartRateAlertLogic
+import org.osmdroid.config.Configuration
+import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.util.MapTileIndex
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Polyline
+import com.heartrunner.app.location.CoordinateConverter
+import java.io.File
 
 @OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -641,106 +653,88 @@ fun TrackMapView(
     trackPoints: List<Pair<Double, Double>>,
     modifier: Modifier = Modifier
 ) {
-    val primaryColor = MaterialTheme.colorScheme.primary
-    val surfaceVariantColor = MaterialTheme.colorScheme.surfaceVariant
-    val outlineColor = MaterialTheme.colorScheme.outlineVariant
-    val onSurfaceVariantColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val context = LocalContext.current
+
+    // 高德地图瓦片源（GCJ-02 坐标系）
+    val gaodeTileSource = remember {
+        object : OnlineTileSourceBase(
+            "GaodeMap", 0, 19, 256, ".png",
+            arrayOf(
+                "https://webrd01.is.autonavi.com",
+                "https://webrd02.is.autonavi.com",
+                "https://webrd03.is.autonavi.com",
+                "https://webrd04.is.autonavi.com"
+            )
+        ) {
+            override fun getTileURLString(pMapTileIndex: Long): String {
+                val zoom = MapTileIndex.getZoom(pMapTileIndex)
+                val x = MapTileIndex.getX(pMapTileIndex)
+                val y = MapTileIndex.getY(pMapTileIndex)
+                return "${baseUrl}/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x=$x&y=$y&z=$zoom"
+            }
+        }
+    }
+
+    // WGS-84 → GCJ-02 坐标转换
+    val gcjPoints = remember(trackPoints) {
+        trackPoints.map { (lat, lon) ->
+            CoordinateConverter.wgs84ToGcj02(lat, lon)
+        }
+    }
 
     Card(
         modifier = modifier,
-        colors = CardDefaults.cardColors(containerColor = surfaceVariantColor.copy(alpha = 0.3f)),
         shape = RoundedCornerShape(16.dp)
     ) {
-        if (trackPoints.size < 2) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        Icons.Default.Map,
-                        contentDescription = null,
-                        tint = onSurfaceVariantColor.copy(alpha = 0.4f),
-                        modifier = Modifier.size(36.dp)
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        if (trackPoints.isEmpty()) "开始记录后显示轨迹" else "等待更多GPS数据...",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = onSurfaceVariantColor.copy(alpha = 0.5f)
-                    )
+        AndroidView(
+            factory = { ctx ->
+                Configuration.getInstance().load(ctx, ctx.getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
+                Configuration.getInstance().userAgentValue = ctx.packageName
+                Configuration.getInstance().osmdroidTileCache = File(ctx.cacheDir, "osmdroid")
+
+                MapView(ctx).apply {
+                    setTileSource(gaodeTileSource)
+                    setMultiTouchControls(true)
+                    controller.setZoom(16.0)
+                    // 默认中心：北京
+                    controller.setCenter(GeoPoint(39.9, 116.4))
+
+                    // 解决地图触摸与外层滚动冲突
+                    setOnTouchListener { v, event ->
+                        when (event.action) {
+                            MotionEvent.ACTION_DOWN -> v.parent?.requestDisallowInterceptTouchEvent(true)
+                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> v.parent?.requestDisallowInterceptTouchEvent(false)
+                        }
+                        false
+                    }
                 }
-            }
-        } else {
-            Canvas(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(16.dp)
-            ) {
-                val padding = 8.dp.toPx()
+            },
+            update = { mapView ->
+                mapView.overlays.removeAll { it is Polyline }
 
-                val lats = trackPoints.map { it.first }
-                val lons = trackPoints.map { it.second }
-                val minLat = lats.min()
-                val maxLat = lats.max()
-                val minLon = lons.min()
-                val maxLon = lons.max()
-
-                val latRange = (maxLat - minLat).coerceAtLeast(0.0001)
-                val lonRange = (maxLon - minLon).coerceAtLeast(0.0001)
-
-                val drawWidth = size.width - padding * 2
-                val drawHeight = size.height - padding * 2
-
-                // 保持比例
-                val scaleX = drawWidth / lonRange
-                val scaleY = drawHeight / latRange
-                val scale = minOf(scaleX, scaleY)
-                val offsetX = padding + (drawWidth - lonRange * scale).toFloat() / 2
-                val offsetY = padding + (drawHeight - latRange * scale).toFloat() / 2
-
-                fun toScreen(lat: Double, lon: Double): Offset {
-                    val x = offsetX + ((lon - minLon) * scale).toFloat()
-                    val y = offsetY + ((maxLat - lat) * scale).toFloat() // 翻转Y轴
-                    return Offset(x, y)
+                if (gcjPoints.size >= 2) {
+                    val polyline = Polyline().apply {
+                        gcjPoints.forEach { (lat, lon) ->
+                            addPoint(GeoPoint(lat, lon))
+                        }
+                        outlinePaint.color = android.graphics.Color.rgb(25, 118, 210)
+                        outlinePaint.strokeWidth = 10f
+                        outlinePaint.isAntiAlias = true
+                        outlinePaint.strokeCap = android.graphics.Paint.Cap.ROUND
+                        outlinePaint.strokeJoin = android.graphics.Paint.Join.ROUND
+                    }
+                    mapView.overlays.add(polyline)
                 }
 
-                // 绘制网格
-                for (i in 0..4) {
-                    val y = padding + drawHeight * i / 4
-                    drawLine(outlineColor.copy(alpha = 0.3f), Offset(padding, y), Offset(size.width - padding, y), 0.5.dp.toPx())
-                    val x = padding + drawWidth * i / 4
-                    drawLine(outlineColor.copy(alpha = 0.3f), Offset(x, padding), Offset(x, size.height - padding), 0.5.dp.toPx())
+                if (gcjPoints.isNotEmpty()) {
+                    val latest = gcjPoints.last()
+                    mapView.controller.animateTo(GeoPoint(latest.first, latest.second))
                 }
 
-                // 绘制轨迹
-                val path = Path()
-                trackPoints.forEachIndexed { index, (lat, lon) ->
-                    val pos = toScreen(lat, lon)
-                    if (index == 0) path.moveTo(pos.x, pos.y) else path.lineTo(pos.x, pos.y)
-                }
-
-                drawPath(
-                    path = path,
-                    color = primaryColor,
-                    style = Stroke(
-                        width = 3.dp.toPx(),
-                        cap = StrokeCap.Round,
-                        join = StrokeJoin.Round
-                    )
-                )
-
-                // 起点（绿色）
-                val startPos = toScreen(trackPoints.first().first, trackPoints.first().second)
-                drawCircle(Color(0xFF4CAF50), radius = 6.dp.toPx(), center = startPos)
-                drawCircle(Color.White, radius = 3.dp.toPx(), center = startPos)
-
-                // 当前位置（蓝色）
-                val endPos = toScreen(trackPoints.last().first, trackPoints.last().second)
-                drawCircle(primaryColor, radius = 6.dp.toPx(), center = endPos)
-                drawCircle(Color.White, radius = 3.dp.toPx(), center = endPos)
-            }
-        }
+                mapView.invalidate()
+            },
+            modifier = Modifier.fillMaxSize()
+        )
     }
 }
 

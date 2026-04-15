@@ -58,5 +58,8 @@ dependencies {
     // Permissions
     implementation("com.google.accompanist:accompanist-permissions:0.37.0")
 
+    // Map
+    implementation("org.osmdroid:osmdroid-android:6.1.20")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

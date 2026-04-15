@@ -23,6 +23,13 @@ class LocationTracker(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     fun startTracking() {
+        // 获取最后已知位置作为初始值
+        val lastKnown = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+            ?: locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+        if (lastKnown != null) {
+            _currentLocation.value = lastKnown
+        }
+
         locationListener = object : LocationListener {
             override fun onLocationChanged(location: Location) {
                 _currentLocation.value = location
@@ -35,6 +42,7 @@ class LocationTracker(private val context: Context) {
             override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
         }
 
+        // GPS 定位
         locationManager.requestLocationUpdates(
             LocationManager.GPS_PROVIDER,
             1000L,
@@ -42,6 +50,19 @@ class LocationTracker(private val context: Context) {
             locationListener!!,
             Looper.getMainLooper()
         )
+
+        // 网络定位作为补充（模拟器和室内）
+        try {
+            if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                locationManager.requestLocationUpdates(
+                    LocationManager.NETWORK_PROVIDER,
+                    1000L,
+                    1f,
+                    locationListener!!,
+                    Looper.getMainLooper()
+                )
+            }
+        } catch (_: Exception) {}
     }
 
     fun stopTracking() {
